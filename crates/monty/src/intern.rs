@@ -354,6 +354,84 @@ pub enum StaticStrings {
     // module strings
     // ==========================
 
+    // math module strings
+    Math,
+    // Rounding
+    Floor,
+    Ceil,
+    Trunc,
+    // Roots & powers
+    Sqrt,
+    Isqrt,
+    Cbrt,
+    Pow,
+    Exp,
+    Exp2,
+    Expm1,
+    // Logarithms
+    Log,
+    Log1p,
+    Log2,
+    Log10,
+    // Float properties
+    Fabs,
+    Isnan,
+    Isinf,
+    Isfinite,
+    Copysign,
+    Isclose,
+    Nextafter,
+    Ulp,
+    // Trigonometric
+    Sin,
+    Cos,
+    Tan,
+    Asin,
+    Acos,
+    Atan,
+    Atan2,
+    // Hyperbolic
+    Sinh,
+    Cosh,
+    Tanh,
+    Asinh,
+    Acosh,
+    Atanh,
+    // Angular conversion
+    Degrees,
+    Radians,
+    // Integer math
+    Factorial,
+    Gcd,
+    Lcm,
+    Comb,
+    Perm,
+    // Modular / decomposition
+    Fmod,
+    Remainder,
+    Modf,
+    Frexp,
+    Ldexp,
+    // Special functions
+    Gamma,
+    Lgamma,
+    Erf,
+    Erfc,
+    // Constants
+    /// `math.pi` constant
+    Pi,
+    /// `math.e` constant
+    #[strum(serialize = "e")]
+    MathE,
+    /// `math.tau` constant
+    Tau,
+    /// `math.inf` constant
+    #[strum(serialize = "inf")]
+    MathInf,
+    /// `math.nan` constant
+    #[strum(serialize = "nan")]
+    MathNan,
+
     // re module strings
     /// Module name for `import re`.
     Re,

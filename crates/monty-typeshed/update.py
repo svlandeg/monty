@@ -119,6 +119,9 @@ COPY_FILES = [
     # all of pathlib dir
     'pathlib/__init__.pyi',
     'pathlib/types.pyi',
+    # ==============================
+    # math module
+    'math.pyi',
 ]
 # content for typeshed's `VERSIONS` file
 VERSIONS = """\
@@ -133,6 +136,7 @@ asyncio: 3.4-
 builtins: 3.0-
 collections: 3.0-
 dataclasses: 3.7-
+math: 3.0-
 os: 3.0-
 pathlib: 3.4-
 pathlib.types: 3.14-
