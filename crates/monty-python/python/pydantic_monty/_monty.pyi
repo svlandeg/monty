@@ -1,7 +1,6 @@
 from collections.abc import Coroutine
 from pathlib import Path
-from types import EllipsisType
-from typing import Any, Callable, Literal, final, overload
+from typing import Any, Callable, Literal, final
 
 from typing_extensions import Self
 
@@ -142,8 +141,9 @@ class Monty:
             inputs: Dict of input variable values (must match names from __init__)
             limits: Optional resource limits configuration
             external_functions: Dict of external function callbacks
-            print_callback: `None` (stdout), a callable `(stream, text) -> None`,
+            print_callback: `None` (write to stdout/stderr), a callable `(stream, text) -> None`,
                 `CollectStreams()`, or `CollectString()`.
+            mount: Optional filesystem mount(s) to expose inside the sandbox.
             os: Optional callback for OS calls.
                 Called with (function_name, args) where function_name is like 'Path.exists'
                 and args is a tuple of arguments. Must return the appropriate value for the
@@ -162,6 +162,8 @@ class Monty:
         inputs: dict[str, Any] | None = None,
         limits: ResourceLimits | None = None,
         print_callback: Callable[[Literal['stdout'], str], None] | CollectStreams | CollectString | None = None,
+        mount: MountDir | list[MountDir] | None = None,
+        os: Callable[[OsFunction, tuple[Any, ...], dict[str, Any]], Any] | None = None,
     ) -> FunctionSnapshot | NameLookupSnapshot | FutureSnapshot | MontyComplete:
         """
         Start the code execution and return a progress object, or completion.
@@ -170,10 +172,23 @@ class Monty:
 
         The GIL is released allowing parallel execution.
 
+        When `mount` or `os` is provided, OS calls are resolved automatically using
+        the same logic as `run()` (mount table first, then the `os` callback),
+        this method only returns a snapshot when a non-OS event is reached
+        (external function, name lookup, future, or completion).
+
+        Auto-dispatch does NOT persist across subsequent `snapshot.resume()` calls —
+        OS calls produced after the first resume surface as a `FunctionSnapshot`
+        with `is_os_function=True`, as before.
+
         Arguments:
             inputs: Dict of input variable values (must match names from __init__)
             limits: Optional resource limits configuration
             print_callback: Optional callback for print output
+            mount: Optional filesystem mount(s) to expose inside the sandbox.
+            os: Optional callback for OS calls. Called with (function_name, args, kwargs)
+                and must return the appropriate value for the OS function. Return
+                `NOT_HANDLED` to fall back to Monty's default unhandled behavior.
 
         Returns:
             FunctionSnapshot if an external function call is pending,
@@ -340,7 +355,7 @@ class MontyRepl:
         external_functions: dict[str, Callable[..., Any]] | None = None,
         print_callback: Callable[[Literal['stdout'], str], None] | CollectStreams | CollectString | None = None,
         mount: MountDir | list[MountDir] | None = None,
-        os: Callable[[str, tuple[Any, ...], dict[str, Any]], Any] | None = None,
+        os: Callable[[OsFunction, tuple[Any, ...], dict[str, Any]], Any] | None = None,
         skip_type_check: bool = False,
     ) -> Any:
         """
@@ -405,6 +420,8 @@ class MontyRepl:
         *,
         inputs: dict[str, Any] | None = None,
         print_callback: Callable[[Literal['stdout'], str], None] | CollectStreams | CollectString | None = None,
+        mount: MountDir | list[MountDir] | None = None,
+        os: Callable[[OsFunction, tuple[Any, ...], dict[str, Any]], Any] | None = None,
         skip_type_check: bool = False,
     ) -> FunctionSnapshot | NameLookupSnapshot | FutureSnapshot | MontyComplete:
         """
@@ -419,6 +436,12 @@ class MontyRepl:
         This enables the same iterative start/resume pattern used by `Monty.start()`,
         including support for async external functions via `FutureSnapshot`.
 
+        When `mount` or `os` is provided, OS calls are resolved automatically using
+        the same logic as `feed_run()`, and this method only returns a snapshot when
+        a non-OS event is reached. Auto-dispatch does NOT persist across subsequent
+        `snapshot.resume()` calls — OS calls produced after the first resume surface
+        as a `FunctionSnapshot` with `is_os_function=True`, as before.
+
         On completion or error, the REPL state is automatically restored.
 
         Arguments:
@@ -426,6 +449,10 @@ class MontyRepl:
             inputs: Dict of input values injected into the REPL namespace
                 before executing the snippet
             print_callback: Optional callback for print output
+            mount: Optional filesystem mount(s) to expose inside the sandbox.
+            os: Optional callback for OS calls. Called with (function_name, args, kwargs)
+                and must return the appropriate value for the OS function. Return
+                `NOT_HANDLED` to fall back to Monty's default unhandled behavior.
             skip_type_check: When `True`, static type checking is bypassed for
                 this snippet AND the snippet is NOT appended to the accumulated
                 type-check context, so later type-checked snippets will not see
@@ -484,18 +511,30 @@ class FunctionSnapshot:
     def call_id(self) -> int:
         """The unique identifier for this external function call."""
 
-    @overload
-    def resume(self, *, return_value: Any) -> FunctionSnapshot | NameLookupSnapshot | FutureSnapshot | MontyComplete:
+    def resume(
+        self,
+        result: ExternalResult,
+        *,
+        mount: MountDir | list[MountDir] | None = None,
+        os: Callable[[OsFunction, tuple[Any, ...], dict[str, Any]], Any] | None = None,
+    ) -> FunctionSnapshot | NameLookupSnapshot | FutureSnapshot | MontyComplete:
         """Resume execution with a return value from the external function.
 
         `resume` may only be called once on each FunctionSnapshot instance.
 
         The GIL is released allowing parallel execution.
 
+        When `mount` or `os` is provided, OS calls produced by the resumed
+        execution are auto-dispatched internally until the next non-OS event,
+        matching the semantics of `Monty.start(mount=..., os=...)`. Auto-dispatch
+        does not persist beyond this single `resume()` call — each `resume()`
+        must be passed `mount`/`os` again to continue the behavior.
+
         Arguments:
-            return_value: The value to return from the external function call.
-            exception: An exception to raise in the Monty interpreter.
-            future: A future to await in the Monty interpreter.
+            result: A typeddict representing the return value, exception, or pending future.
+            mount: Optional filesystem mount(s) to expose inside the sandbox.
+            os: Optional callback for OS calls. Return `NOT_HANDLED` to fall back
+                to Monty's default unhandled behavior.
 
         Returns:
             FunctionSnapshot if another external function call is pending,
@@ -504,34 +543,24 @@ class FunctionSnapshot:
             MontyComplete if execution finished.
 
         Raises:
-            TypeError: If both arguments are provided.
+            TypeError: If both arguments are incorrect.
             RuntimeError: If execution has already completed.
             MontyRuntimeError: If the code raises an exception during execution
         """
 
-    @overload
-    def resume(
-        self, *, exception: BaseException
+    def resume_not_handled(
+        self,
+        *,
+        mount: MountDir | list[MountDir] | None = None,
+        os: Callable[[OsFunction, tuple[Any, ...], dict[str, Any]], Any] | None = None,
     ) -> FunctionSnapshot | NameLookupSnapshot | FutureSnapshot | MontyComplete:
-        """Resume execution by raising the exception in the Monty interpreter.
-
-        See docstring for the first overload for more information.
-        """
-
-    @overload
-    def resume(self, *, future: EllipsisType) -> FunctionSnapshot | NameLookupSnapshot | FutureSnapshot | MontyComplete:
-        """Resume execution by returning a pending future.
-
-        No result is provided, we simply resume execution stating that a future is pending.
-
-        See docstring for the first overload for more information.
-        """
-
-    def resume_not_handled(self) -> FunctionSnapshot | NameLookupSnapshot | FutureSnapshot | MontyComplete:
         """Resume an OS snapshot using Monty's default unhandled-OS behavior.
 
         This is only valid when `is_os_function` is `True`. It behaves the same
         as leaving the OS call unhandled in Monty's runtime.
+
+        When `mount` or `os` is provided, OS calls produced by the resumed
+        execution are auto-dispatched until a non-OS event is reached.
         """
 
     def dump(self) -> bytes:
@@ -575,6 +604,8 @@ class NameLookupSnapshot:
         self,
         *,
         value: Any | None = None,
+        mount: MountDir | list[MountDir] | None = None,
+        os: Callable[[OsFunction, tuple[Any, ...], dict[str, Any]], Any] | None = None,
     ) -> FunctionSnapshot | NameLookupSnapshot | FutureSnapshot | MontyComplete:
         """Resume execution with result the value from a name lookup, if any.
 
@@ -584,8 +615,15 @@ class NameLookupSnapshot:
 
         The GIL is released allowing parallel execution.
 
+        When `mount` or `os` is provided, OS calls produced after the name is
+        resolved are auto-dispatched until a non-OS event is reached, matching
+        the semantics of `Monty.start(mount=..., os=...)`.
+
         Arguments:
             value: The value from the name lookup, if any.
+            mount: Optional filesystem mount(s) to expose inside the sandbox.
+            os: Optional callback for OS calls. Return `NOT_HANDLED` to fall back
+                to Monty's default unhandled behavior.
 
         Returns:
             FunctionSnapshot if an external function call is pending,
@@ -642,6 +680,9 @@ class FutureSnapshot:
     def resume(
         self,
         results: dict[int, ExternalResult],
+        *,
+        mount: MountDir | list[MountDir] | None = None,
+        os: Callable[[OsFunction, tuple[Any, ...], dict[str, Any]], Any] | None = None,
     ) -> FunctionSnapshot | NameLookupSnapshot | FutureSnapshot | MontyComplete:
         """Resume execution with results for one or more futures.
 
@@ -649,9 +690,16 @@ class FutureSnapshot:
 
         The GIL is released allowing parallel execution.
 
+        When `mount` or `os` is provided, OS calls produced after the futures
+        resolve are auto-dispatched until a non-OS event is reached, matching
+        the semantics of `Monty.start(mount=..., os=...)`.
+
         Arguments:
             results: Dict mapping call_id to result dict. Each result dict must have
                 either 'return_value' or 'exception' key (not both).
+            mount: Optional filesystem mount(s) to expose inside the sandbox.
+            os: Optional callback for OS calls. Return `NOT_HANDLED` to fall back
+                to Monty's default unhandled behavior.
 
         Returns:
             FunctionSnapshot if an external function call is pending,
