@@ -507,6 +507,31 @@ class FunctionSnapshot:
     def kwargs(self) -> dict[str, Any]:
         """The keyword arguments passed to the external function."""
 
+    def args_json(self) -> str:
+        """Serialize the positional args as a JSON array.
+
+        Uses the same natural-form mapping as 'MontyComplete.output_json':
+        JSON-native Python values ('None', 'bool', 'int', 'float',
+        'str', list, and dict with string keys) are emitted bare, while
+        non-JSON-native values (tuples, bytes, sets, dataclasses, ...) are
+        wrapped in a single-key object with a '$'-prefixed tag such as
+        '{"$tuple": [...]}'.
+
+        Raises:
+            RuntimeError: If serialization fails.
+        """
+
+    def kwargs_json(self) -> str:
+        """Serialize the keyword args as a JSON object.
+
+        Python kwargs always have string keys, so the result is a plain
+        '{"<name>": <value>, ...}' object using the same natural-form
+        mapping as 'args_json' for the values.
+
+        Raises:
+            RuntimeError: If serialization fails.
+        """
+
     @property
     def call_id(self) -> int:
         """The unique identifier for this external function call."""
@@ -739,7 +764,35 @@ class MontyComplete:
 
     @property
     def output(self) -> Any:
-        """The final output value from the executed code."""
+        """The final output value from the executed code.
+
+        Converted from Monty's internal representation to a Python object on
+        each access. Callers that want to inspect the value repeatedly should
+        save it to a local variable.
+        """
+
+    def output_json(self) -> str:
+        """Serialize the output as a Monty-specific JSON string.
+
+        This is **not** a drop-in wrapper around ``json.dumps(result.output)``:
+        the shape is chosen to preserve types that plain JSON can't express,
+        so consumers can round-trip richer Python values than CPython's
+        stdlib would allow. JSON-native Python types (None, bool, int, float,
+        str, list, and dict with string keys) become bare JSON values.
+        Non-JSON-native types are wrapped in a single-key object with a
+        ``$``-prefixed tag, for example:
+
+        - tuple → ``{"$tuple": [...]}``
+        - bytes → ``{"$bytes": [...]}``
+        - set / frozenset → ``{"$set": [...]}`` / ``{"$frozenset": [...]}``
+        - ``...`` → ``{"$ellipsis": "..."}``
+        - ``nan`` / ``inf`` / ``-inf`` → ``{"$float": "nan" | "inf" | "-inf"}``
+        - dict with any non-string key → ``{"$dict": [[k, v], ...]}``
+        - dataclass → ``{"$dataclass": {...}, "name": "ClassName"}``
+
+        Raises:
+            RuntimeError: If serialization fails.
+        """
 
     def __repr__(self) -> str: ...
 
